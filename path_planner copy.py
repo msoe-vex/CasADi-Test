@@ -25,7 +25,7 @@ lookahead_step_timeinterval = 0.1
 
 # start point and end point
 start_point = [0.0, 0.0]
-end_point = [1, 1]
+end_point = [0.6, 0.6]
 
 # List of obstacle coordinates
 obstacles = [[0.3, 0.3], [0.5, 0.5], [0.7, 0.2]]
@@ -48,8 +48,7 @@ class MPC:
 
 	def Solve(self, state):
 		# Define maximum allowable acceleration
-		max_accel = 1  # Example value, adjust as needed
-		max_velocity = 1
+		max_accel = 2  # Example value, adjust as needed
 
 		# Define optimization variables
 		x = SX.sym('x', self.num_of_x_)
@@ -61,10 +60,8 @@ class MPC:
 
 		# Initial variables
 		x_ = [0] * self.num_of_x_
-		# x_[self.first_state_index_.px] = state[0]
-		# x_[self.first_state_index_.py] = state[1]
-		# x_[self.first_state_index_.vx] = 0  # Ensure initial vx is 0
-		# x_[self.first_state_index_.vy] = 0  # Ensure initial vy is 0
+		x_[self.first_state_index_.px] = state[0]
+		x_[self.first_state_index_.py] = state[1]
 
 		# Penalty on states
 		for i in range(lookahead_step_num - 1, lookahead_step_num):
@@ -78,42 +75,35 @@ class MPC:
 			cost += w_dv * (dvx**2) + w_dv * (dvy**2)
 		
 		# Additional penalty on final position
-		final_position_weight = 10
 		final_x = x[self.first_state_index_.px + lookahead_step_num - 1]
 		final_y = x[self.first_state_index_.py + lookahead_step_num - 1]
-		cost += final_position_weight * ((final_x - end_point[0])**2 + (final_y - end_point[1])**2)  # High weight to strongly encourage final stop
+		cost += 50.0 * ((final_x - end_point[0])**2 + (final_y - end_point[1])**2)  # High weight to strongly encourage final stop
 
 		# Additional penalty on final velocities to encourage a stop
-		final_velocity_weight = 10
 		final_vx = x[self.first_state_index_.vx + lookahead_step_num - 2]
 		final_vy = x[self.first_state_index_.vy + lookahead_step_num - 2]
-		cost += final_velocity_weight * (final_vx**2 + final_vy**2)  # High weight to strongly encourage final stop
+		cost += 50.0 * (final_vx**2 + final_vy**2)  # High weight to strongly encourage final stop
 
-		# # Additional penalty on initial velocities to encourage starting from zero
-		# initial_vx = x[self.first_state_index_.vx]
-		# initial_vy = x[self.first_state_index_.vy]
-		# cost += final_velocity_weight * (initial_vx**2 + initial_vy**2)
+		# Additional penalty on initial velocities to encourage starting from zero
+		initial_vx = x[self.first_state_index_.vx]
+		initial_vy = x[self.first_state_index_.vy]
+		cost += 50.0 * (initial_vx**2 + initial_vy**2)  # High weight to strongly encourage final stop
 
 		# Define lowerbound and upperbound of x
 		x_lowerbound_ = [-exp(10)] * self.num_of_x_
 		x_upperbound_ = [exp(10)] * self.num_of_x_
-		# Position constraints
-		for i in range(self.first_state_index_.px, self.first_state_index_.px):
-			x_lowerbound_[i] = 0
-			x_upperbound_[i] = 1
-		# Velocity constraints
 		for i in range(self.first_state_index_.vx, self.num_of_x_):
-			x_lowerbound_[i] = -max_velocity
-			x_upperbound_[i] = max_velocity
-		x_lowerbound_[self.first_state_index_.vx] = 0
-		x_upperbound_[self.first_state_index_.vy] = 0
-
-		x_lowerbound_[self.first_state_index_.vx + lookahead_step_num - 2] = 0
-		x_upperbound_[self.first_state_index_.vy + lookahead_step_num - 2] = 0
+			x_lowerbound_[i] = -0.6
+			x_upperbound_[i] = 0.6
 
 		# Define lowerbound and upperbound of g constraints
 		g_lowerbound_ = [0] * self.num_of_g_
 		g_upperbound_ = [0] * self.num_of_g_
+
+		g_lowerbound_[self.first_state_index_.px] = state[0]
+		g_upperbound_[self.first_state_index_.px] = state[0]
+		g_lowerbound_[self.first_state_index_.py] = state[1]
+		g_upperbound_[self.first_state_index_.py] = state[1]
 
 		# Initialize g constraints list with SX elements
 		g = [SX(0)] * self.num_of_g_
@@ -128,7 +118,17 @@ class MPC:
 		g[self.first_state_index_.vx + lookahead_step_num - 2] = x[self.first_state_index_.vx + lookahead_step_num - 2]  # Final vx = 0
 		g[self.first_state_index_.vy + lookahead_step_num - 2] = x[self.first_state_index_.vy + lookahead_step_num - 2]  # Final vy = 0
 
-		# # Add acceleration constraints
+		# Set bounds for the initial and final velocity constraints
+		g_lowerbound_[self.first_state_index_.vx] = 0
+		g_upperbound_[self.first_state_index_.vx] = 0
+		g_lowerbound_[self.first_state_index_.vy] = 0
+		g_upperbound_[self.first_state_index_.vy] = 0
+		g_lowerbound_[self.first_state_index_.vx + lookahead_step_num - 2] = 0
+		g_upperbound_[self.first_state_index_.vx + lookahead_step_num - 2] = 0
+		g_lowerbound_[self.first_state_index_.vy + lookahead_step_num - 2] = 0
+		g_upperbound_[self.first_state_index_.vy + lookahead_step_num - 2] = 0
+
+		# Add acceleration constraints
 		g_index = 1 + self.first_state_index_.py + 1 * lookahead_step_num
 		for i in range(lookahead_step_num - 2):
 			curr_vx_index = i + self.first_state_index_.vx
@@ -193,51 +193,9 @@ class MPC:
 		res = solver(x0=x_, lbx=x_lowerbound_, ubx=x_upperbound_, lbg=g_lowerbound_, ubg=g_upperbound_)
 		return res
 
-	def print_trajectory_details(self, res, lookahead_step_num, lookahead_step_timeinterval):
-		"""
-		Print the position, velocity, and acceleration of each step in the trajectory.
-
-		Parameters:
-		- res: The result object from the solver containing optimized trajectory.
-		- lookahead_step_num: The number of steps in the trajectory.
-		- lookahead_step_timeinterval: Time interval between each step.
-		"""
-		# Extract the optimized trajectory from the result
-		x_opt = res['x'].full().flatten()
-		
-		# Print header
-		print(f"{'Step':<5} {'Position (x, y)':<20}\t{'Velocity (vx, vy)':<20}\t{'Acceleration (ax, ay)':<25}")
-		print("-" * 70)
-		
-		# Loop through each step in the trajectory
-		for i in range(lookahead_step_num):
-			# Position at step i
-			px = x_opt[self.first_state_index_.px + i]
-			py = x_opt[self.first_state_index_.py + i]
-
-			if i < lookahead_step_num - 1:  # Ensure we don’t go out of bounds
-				vx = x_opt[self.first_state_index_.vx + i]
-				vy = x_opt[self.first_state_index_.vy + i]
-			else:
-				vx = vy = 0  # No velocity at the last step
-
-			# Acceleration between step i and i+1
-			if i < lookahead_step_num - 2:  # Ensure we don’t go out of bounds
-				next_vx = x_opt[self.first_state_index_.vx + i + 1]
-				next_vy = x_opt[self.first_state_index_.vy + i + 1]
-				ax = (next_vx - vx) / lookahead_step_timeinterval
-				ay = (next_vy - vy) / lookahead_step_timeinterval
-			else:
-				ax = ay = 0  # No acceleration at the last step
-
-			# Print the details for this step
-			print(f"{i:<5} ({px:.2f}, {py:.2f})\t\t({vx:.2f}, {vy:.2f})\t\t({ax:.2f}, {ay:.2f})")
-
 
 mpc_ = MPC()
 sol = mpc_.Solve(start_point)
-
-mpc_.print_trajectory_details(sol, lookahead_step_num, lookahead_step_timeinterval)
 
 # Plot results
 fig = plt.figure(figsize=(7, 7))
