@@ -1,10 +1,13 @@
 {
     "cSpell.words": [
         "casadi",
+        "figsize",
         "ipopt",
         "lowerbound",
+        "nlpsol",
         "Tianchen",
         "timeinterval",
-        "upperbound"
+        "upperbound",
+        "vertcat"
     ]
 }

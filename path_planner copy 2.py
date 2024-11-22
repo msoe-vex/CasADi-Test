@@ -20,24 +20,18 @@ NUM_OF_STATES = 2
 NUM_OF_G_STATES = 1
 
 # MPC parameters
-lookahead_step_num = 50
+lookahead_step_num = 30
 lookahead_step_timeinterval = 0.1
 
 # start point and end point
 start_point = [0.1, 0.1]
-end_point = [0.9, 0.9]
-
-robot_radius = 8/144
-
-# Define maximum allowable velocity and acceleration
-max_velocity = 100/144
-max_accel = 100/144  # Example value, adjust as needed
+end_point = [1, 1]
 
 # List of obstacle coordinates
-obstacles = [[3/6, 2/6], [3/6, 4/6], [2/6, 3/6], [4/6, 3/6]]
+obstacles = [[0.3, 0.3], [0.5, 0.5], [0.7, 0.2]]
 
 # threshold of safety
-obstacle_radius = 3.5/144
+safety_r = 0.1
 
 class FirstStateIndex:
 	def __init__(self, n):
@@ -53,6 +47,10 @@ class MPC:
 		self.num_of_g_ = (NUM_OF_STATES + NUM_OF_G_STATES) * lookahead_step_num + len(obstacles) * lookahead_step_num + (lookahead_step_num - 1) * NUM_OF_ACTS  # Including acceleration constraints
 
 	def Solve(self, state):
+		# Define maximum allowable acceleration
+		max_accel = 1  # Example value, adjust as needed
+		max_velocity = 1
+
 		# Define optimization variables
 		x = SX.sym('x', self.num_of_x_)
 
@@ -65,6 +63,8 @@ class MPC:
 		x_ = [0] * self.num_of_x_
 		x_[self.first_state_index_.px] = state[0]
 		x_[self.first_state_index_.py] = state[1]
+		x_[self.first_state_index_.vx] = 0  # Ensure initial vx is 0
+		x_[self.first_state_index_.vy] = 0  # Ensure initial vy is 0
 
 		# Penalty on states
 		for i in range(lookahead_step_num - 1, lookahead_step_num):
@@ -78,35 +78,42 @@ class MPC:
 			cost += w_dv * (dvx**2) + w_dv * (dvy**2)
 		
 		# Additional penalty on final position
+		final_position_weight = 10
 		final_x = x[self.first_state_index_.px + lookahead_step_num - 1]
 		final_y = x[self.first_state_index_.py + lookahead_step_num - 1]
-		cost += 50.0 * ((final_x - end_point[0])**2 + (final_y - end_point[1])**2)  # High weight to strongly encourage final stop
+		cost += final_position_weight * ((final_x - end_point[0])**2 + (final_y - end_point[1])**2)  # High weight to strongly encourage final stop
 
 		# Additional penalty on final velocities to encourage a stop
+		final_velocity_weight = 10
 		final_vx = x[self.first_state_index_.vx + lookahead_step_num - 2]
 		final_vy = x[self.first_state_index_.vy + lookahead_step_num - 2]
-		cost += 50.0 * (final_vx**2 + final_vy**2)  # High weight to strongly encourage final stop
+		cost += final_velocity_weight * (final_vx**2 + final_vy**2)  # High weight to strongly encourage final stop
 
-		# Additional penalty on initial velocities to encourage starting from zero
-		initial_vx = x[self.first_state_index_.vx]
-		initial_vy = x[self.first_state_index_.vy]
-		cost += 50.0 * (initial_vx**2 + initial_vy**2)  # High weight to strongly encourage final stop
+		# # Additional penalty on initial velocities to encourage starting from zero
+		# initial_vx = x[self.first_state_index_.vx]
+		# initial_vy = x[self.first_state_index_.vy]
+		# cost += final_velocity_weight * (initial_vx**2 + initial_vy**2)
 
 		# Define lowerbound and upperbound of x
 		x_lowerbound_ = [-exp(10)] * self.num_of_x_
 		x_upperbound_ = [exp(10)] * self.num_of_x_
+		# Position constraints
+		for i in range(self.first_state_index_.px, self.first_state_index_.px):
+			x_lowerbound_[i] = 0
+			x_upperbound_[i] = 1
+		# Velocity constraints
 		for i in range(self.first_state_index_.vx, self.num_of_x_):
 			x_lowerbound_[i] = -max_velocity
 			x_upperbound_[i] = max_velocity
+		x_lowerbound_[self.first_state_index_.vx] = 0
+		x_upperbound_[self.first_state_index_.vy] = 0
+
+		x_lowerbound_[self.first_state_index_.vx + lookahead_step_num - 2] = 0
+		x_upperbound_[self.first_state_index_.vy + lookahead_step_num - 2] = 0
 
 		# Define lowerbound and upperbound of g constraints
 		g_lowerbound_ = [0] * self.num_of_g_
 		g_upperbound_ = [0] * self.num_of_g_
-
-		g_lowerbound_[self.first_state_index_.px] = state[0]
-		g_upperbound_[self.first_state_index_.px] = state[0]
-		g_lowerbound_[self.first_state_index_.py] = state[1]
-		g_upperbound_[self.first_state_index_.py] = state[1]
 
 		# Initialize g constraints list with SX elements
 		g = [SX(0)] * self.num_of_g_
@@ -121,17 +128,7 @@ class MPC:
 		g[self.first_state_index_.vx + lookahead_step_num - 2] = x[self.first_state_index_.vx + lookahead_step_num - 2]  # Final vx = 0
 		g[self.first_state_index_.vy + lookahead_step_num - 2] = x[self.first_state_index_.vy + lookahead_step_num - 2]  # Final vy = 0
 
-		# Set bounds for the initial and final velocity constraints
-		g_lowerbound_[self.first_state_index_.vx] = 0
-		g_upperbound_[self.first_state_index_.vx] = 0
-		g_lowerbound_[self.first_state_index_.vy] = 0
-		g_upperbound_[self.first_state_index_.vy] = 0
-		g_lowerbound_[self.first_state_index_.vx + lookahead_step_num - 2] = 0
-		g_upperbound_[self.first_state_index_.vx + lookahead_step_num - 2] = 0
-		g_lowerbound_[self.first_state_index_.vy + lookahead_step_num - 2] = 0
-		g_upperbound_[self.first_state_index_.vy + lookahead_step_num - 2] = 0
-
-		# Add acceleration constraints
+		# # Add acceleration constraints
 		g_index = 1 + self.first_state_index_.py + 1 * lookahead_step_num
 		for i in range(lookahead_step_num - 2):
 			curr_vx_index = i + self.first_state_index_.vx
@@ -178,7 +175,7 @@ class MPC:
 			# Inequality constraints for each obstacle
 			for obstacle in obstacles:
 				g[g_index] = (next_px - obstacle[0])**2 + (next_py - obstacle[1])**2
-				g_lowerbound_[g_index] = (obstacle_radius+robot_radius)**2
+				g_lowerbound_[g_index] = safety_r**2
 				g_upperbound_[g_index] = exp(10)
 				g_index += 1
 
@@ -195,8 +192,8 @@ class MPC:
 		# Solve the NLP
 		res = solver(x0=x_, lbx=x_lowerbound_, ubx=x_upperbound_, lbg=g_lowerbound_, ubg=g_upperbound_)
 		return res
-	
-	def print_trajectory_details(self, res):
+
+	def print_trajectory_details(self, res, lookahead_step_num, lookahead_step_timeinterval):
 		"""
 		Print the position, velocity, and acceleration of each step in the trajectory.
 
@@ -211,8 +208,6 @@ class MPC:
 		# Print header
 		print(f"{'Step':<5} {'Position (x, y)':<20}\t{'Velocity (vx, vy)':<20}\t{'Acceleration (ax, ay)':<25}")
 		print("-" * 70)
-
-		lemlib_output_string = ""
 		
 		# Loop through each step in the trajectory
 		for i in range(lookahead_step_num):
@@ -238,20 +233,11 @@ class MPC:
 			# Print the details for this step
 			print(f"{i:<5} ({px:.2f}, {py:.2f})\t\t({vx:.2f}, {vy:.2f})\t\t({ax:.2f}, {ay:.2f})")
 
-			speed = sqrt(vx*vx+vy*vy)
-
-			lemlib_output_string += f"{px*144:.3f}, {py*144:.3f}, {speed*144:.3f}\n"
-		lemlib_output_string += "endData"
-
-		file = open('path_output.txt', 'w')
-		file.write(lemlib_output_string)
-		file.close()
-
 
 mpc_ = MPC()
 sol = mpc_.Solve(start_point)
 
-mpc_.print_trajectory_details(sol)
+mpc_.print_trajectory_details(sol, lookahead_step_num, lookahead_step_timeinterval)
 
 # Plot results
 fig = plt.figure(figsize=(7, 7))
@@ -260,8 +246,8 @@ planned_py = sol['x'][1 * lookahead_step_num:2 * lookahead_step_num]
 plt.plot(planned_px, planned_py, 'o-', label='planned trajectory')
 theta = np.arange(0, 2 * np.pi, 0.01)
 for obstacle in obstacles:
-	danger_x = obstacle[0] + (obstacle_radius - 0.005) * np.cos(theta)
-	danger_y = obstacle[1] + (obstacle_radius - 0.005) * np.sin(theta)
+	danger_x = obstacle[0] + (safety_r - 0.005) * np.cos(theta)
+	danger_y = obstacle[1] + (safety_r - 0.005) * np.sin(theta)
 	plt.plot(danger_x, danger_y, 'r--', label='danger area')
 plt.plot(start_point[0], start_point[1], 'o', label='start point')
 plt.plot(end_point[0], end_point[1], 'o', label='target point')
