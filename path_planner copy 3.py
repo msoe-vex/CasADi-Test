@@ -1,3 +1,12 @@
+#!/usr/bin/env python
+
+# ---------------------------------------------------------------------------
+# Path Planner
+# Author: Tianchen Ji
+# Email: tj12@illinois.edu
+# Create Date: 2019-11-26
+# ---------------------------------------------------------------------------
+
 from casadi import *
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,26 +17,27 @@ NUM_OF_ACTS = 2
 # The num of MPC states, here include px and py
 NUM_OF_STATES = 2
 
+NUM_OF_G_STATES = 1
+
 # MPC parameters
-lookahead_step_num = 30
+lookahead_step_num = 25
 lookahead_step_timeinterval = 0.1
 
 # start point and end point
 start_point = [0.1, 0.1]
-end_point = [.6, .8]
+end_point = [0.6, 0.8]
 
 robot_radius = 8/144
 
 # Define maximum allowable velocity and acceleration
-max_velocity = 70/144
-max_accel = 200/144  # Example value, adjust as needed
+max_velocity = 400/144
+max_accel = 1000/144  # Example value, adjust as needed
 
 # List of obstacle coordinates
 obstacles = [[3/6, 2/6], [3/6, 4/6], [2/6, 3/6], [4/6, 3/6]]
 
 # threshold of safety
 obstacle_radius = 3.5/144
-#obstacle_radius = 0.1
 
 class FirstStateIndex:
 	def __init__(self, n):
@@ -48,43 +58,54 @@ class MPC:
 		x = SX.sym('x', self.num_of_x_)
 
 		# Define cost functions
-		w_cte = 10.0 # Bigger value means last point has to be closer to designated end point
-		w_dv = 10 # Bigger value means smoother path
+		w_cte = 10.0
+		w_dv = 1.0
 		cost = 0.0
 
 		# Initial variables
 		x_ = [0] * self.num_of_x_
-
-		# Set initial values as a linear path
 		init_x = numpy.linspace(state[0], end_point[0], lookahead_step_num)
 		init_y = numpy.linspace(state[1], end_point[1], lookahead_step_num)
-
-		#Set initial velocity to 0
 		init_v = [0] * ((lookahead_step_num-1) * NUM_OF_ACTS)
 		x_ = np.concatenate((init_x, init_y, init_v))
+		# x_[self.first_state_index_.px] = state[0]
+		# x_[self.first_state_index_.py] = state[1]
+		# x_[self.first_state_index_.px+lookahead_step_num-1] = end_point[0]
+		# x_[self.first_state_index_.py+lookahead_step_num-1] = end_point[1]
 
-		# Penalty on inputs, smoothing path, penalizes change in velocity
+		# Penalty on states
+		for i in range(lookahead_step_num - 1, lookahead_step_num):
+			cte = (x[self.first_state_index_.px + i] - end_point[0])**2 + (x[self.first_state_index_.py + i] - end_point[1])**2
+			cost += w_cte * cte
+
+		# Penalty on inputs
 		for i in range(lookahead_step_num - 2):
 			dvx = x[self.first_state_index_.vx + i + 1] - x[self.first_state_index_.vx + i]
 			dvy = x[self.first_state_index_.vy + i + 1] - x[self.first_state_index_.vy + i]
 			cost += w_dv * (dvx**2 + dvy**2)
 		
-		# # Penalty on states, avoid going towards the middle of the field
-		# for i in range(lookahead_step_num - 1):
-		# 	px = x[self.first_state_index_.px+i]
-		# 	py = x[self.first_state_index_.py+i]
+		# Additional penalty on final position
+		final_x = x[self.first_state_index_.px + lookahead_step_num - 1]
+		final_y = x[self.first_state_index_.py + lookahead_step_num - 1]
+		cost += 10.0 * ((final_x - end_point[0])**2 + (final_y - end_point[1])**2)  # High weight to strongly encourage final stop
 
-		# 	cost += if_else((px-0.5)**2 + (py-0.5)**2 < (1/6)**2, 1e10, 0)
+		# Additional penalty on final velocities to encourage a stop
+		final_vx = x[self.first_state_index_.vx + lookahead_step_num - 2]
+		final_vy = x[self.first_state_index_.vy + lookahead_step_num - 2]
+		cost += 10.0 * (final_vx**2 + final_vy**2)  # High weight to strongly encourage final stop
+
+		# Additional penalty on initial velocities to encourage starting from zero
+		initial_vx = x[self.first_state_index_.vx]
+		initial_vy = x[self.first_state_index_.vy]
+		cost += 10.0 * (initial_vx**2 + initial_vy**2)  # High weight to strongly encourage final stop
+
 
 		# Define lowerbound and upperbound for position and velocity
 		x_lowerbound_ = [-exp(10)] * self.num_of_x_
 		x_upperbound_ = [exp(10)] * self.num_of_x_
-
-		# Ensure path does not go outside the field
 		for i in range(self.first_state_index_.px, self.first_state_index_.py+lookahead_step_num):
 			x_lowerbound_[i] = 0
 			x_upperbound_[i] = 1
-		# Ensure velocity does not exceed the max speed
 		for i in range(self.first_state_index_.vx, self.first_state_index_.vy+lookahead_step_num-1):
 			x_lowerbound_[i] = -max_velocity
 			x_upperbound_[i] = max_velocity
@@ -118,7 +139,7 @@ class MPC:
 	
 		g_index = 0
 		
-		# Add speed constraints
+		# Add velocity magnitude constraints
 		for i in range(lookahead_step_num - 1):
 			curr_vx_index = self.first_state_index_.vx + i
 			curr_vy_index = self.first_state_index_.vy + i
@@ -176,7 +197,7 @@ class MPC:
 			g_upperbound_[g_index] = 0
 			g_index += 1
 
-		# Obstacle constraints
+		# Update obstacle constraints as previously defined
 		for i in range(lookahead_step_num-1):
 			curr_px_index = i + self.first_state_index_.px
 			curr_py_index = i + self.first_state_index_.py
@@ -257,49 +278,25 @@ class MPC:
 		file.close()
 	
 	def plotResults(self, sol):
-		# Create a figure with a flexible window size
-		fig, ax = plt.subplots(figsize=(8, 8))  # The graph itself will remain square
-		
+		# Plot results
+		fig = plt.figure(figsize=(7, 7))
 		planned_px = sol['x'][0:1 * lookahead_step_num]
 		planned_py = sol['x'][1 * lookahead_step_num:2 * lookahead_step_num]
-		ax.plot(planned_px, planned_py, 'o-', label='path')
+		plt.plot(planned_px, planned_py, 'o-', label='planned trajectory')
 		theta = np.arange(0, 2 * np.pi, 0.01)
-		
-		ax.plot(start_point[0], start_point[1], 'o', label='start')
-		ax.plot(end_point[0], end_point[1], 'o', label='target')
-		
-		first_obstacle = True
 		for obstacle in obstacles:
 			danger_x = obstacle[0] + (obstacle_radius - 0.005) * np.cos(theta)
 			danger_y = obstacle[1] + (obstacle_radius - 0.005) * np.sin(theta)
-			if first_obstacle:
-				#ax.plot(obstacle[0], obstacle[1], 'o', color='red', label='obstacle')
-				ax.plot(danger_x, danger_y, 'r-', label='obstacle')
-				first_obstacle = False
-			else:
-				#ax.plot(obstacle[0], obstacle[1], 'o', color='red')
-				ax.plot(danger_x, danger_y, 'r-')
-		
-		# Plot the circle in the middle of the graph with radius 1/6
-		radius = 1 / 6
-		center_x, center_y = 0.5, 0.5
-		circle_x = center_x + radius * np.cos(theta)
-		circle_y = center_y + radius * np.sin(theta)
-		ax.plot(circle_x, circle_y, 'b-')
-		
-		# Add the legend outside the square graph
-		ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), borderaxespad=0., frameon=False)
-		
-		# Ensure the graph remains square
-		ax.set_aspect('equal', adjustable='box')  # Make sure the graph area is square
-		ax.set_xlim(-0.1, 1.1)
-		ax.set_ylim(-0.1, 1.1)
-		ax.grid()
-		
-		# Display the plot
+			plt.plot(danger_x, danger_y, 'r--', label='danger area')
+		plt.plot(start_point[0], start_point[1], 'o', label='start point')
+		plt.plot(end_point[0], end_point[1], 'o', label='target point')
+		for obstacle in obstacles:
+			plt.plot(obstacle[0], obstacle[1], 'o', label='obstacle')
+		plt.legend(loc='upper left')
+		plt.axis('equal')
+		plt.axis([-0.1, 1.1, -0.1, 1.1])
+		plt.grid()
 		plt.show()
-
-
 
 
 mpc_ = MPC()
