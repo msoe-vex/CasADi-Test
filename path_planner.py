@@ -1,6 +1,7 @@
 from casadi import *
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.transforms import Affine2D
 
 # The num of MPC actions, here include vx and vy
 NUM_OF_ACTS = 2
@@ -19,7 +20,10 @@ time_step_max = 0.5   # Maximum time step
 start_point = [0.1, 0.1]
 end_point = [.6, .8]
 
-robot_radius = 8/144
+robot_length = 16/144
+robot_width = 15/144
+
+robot_radius = max(robot_length, robot_width)/sqrt(2)
 
 # Define maximum allowable velocity and acceleration
 max_velocity = 70/144
@@ -278,23 +282,42 @@ class MPC:
 		fig, ax = plt.subplots(figsize=(8, 8))  # The graph itself will remain square
 
 		# Convert CasADi matrices to NumPy arrays
-		planned_px = np.array(sol['x'][0:1 * lookahead_step_num]).flatten()
-		planned_py = np.array(sol['x'][1 * lookahead_step_num:2 * lookahead_step_num]).flatten()
+		planned_px = np.array(sol['x'][self.indexes.px:self.indexes.py]).flatten()
+		planned_py = np.array(sol['x'][self.indexes.py:self.indexes.vx]).flatten()
+		planned_vx = np.array(sol['x'][self.indexes.vx:self.indexes.vy]).flatten()  # x-velocity
+		planned_vy = np.array(sol['x'][self.indexes.vy:self.indexes.dt]).flatten()  # y-velocity
+
+		planned_theta = np.arctan2(planned_vy, planned_vx)
+		# Makes sure the heading for the start and end point matches that of the second and second-to-last point
+		planned_theta = np.concatenate(([planned_theta[1]],planned_theta[1:-1],[planned_theta[-2],planned_theta[-2]]))
 
 		# Plot the planned path
 		ax.plot(planned_px, planned_py, 'o-', label='path')
 
 		# Define theta for circles
-		theta = np.linspace(0, 2 * np.pi, 100)
+		theta_list = np.linspace(0, 2 * np.pi, 100)
 
 		# Draw the robot's radius at each planned point
-		mod = lookahead_step_num / 10
+		num_outlines = 3
+		mod = round(lookahead_step_num / (num_outlines - 1))
 		index = 0
-		for px, py in zip(planned_px, planned_py):
+		for px, py, theta in zip(planned_px, planned_py, planned_theta):
+			rotation = Affine2D().rotate_around(px, py, theta) 
+			rectangle = plt.Rectangle(
+				(px - robot_length / 2, py - robot_width / 2),  # Bottom-left corner
+				robot_length,  # Width of the rectangle
+				robot_width,   # Height of the rectangle
+				edgecolor='g',
+				facecolor='none',
+				alpha=0.5
+			)
+			rectangle.set_transform(rotation + ax.transData)
+
 			if(index % mod == 0 or index == lookahead_step_num - 1):
-				robot_circle_x = px + robot_radius * np.cos(theta)
-				robot_circle_y = py + robot_radius * np.sin(theta)
+				robot_circle_x = px + robot_radius * np.cos(theta_list)
+				robot_circle_y = py + robot_radius * np.sin(theta_list)
 				ax.plot(robot_circle_x, robot_circle_y, 'g--', alpha=0.5, label='robot radius' if index == 0 else None)
+				ax.add_patch(rectangle)
 			index += 1
 		
 		# Plot start and end points
@@ -304,8 +327,8 @@ class MPC:
 		# Plot obstacles
 		first_obstacle = True
 		for obstacle in obstacles:
-			danger_x = obstacle[0] + (obstacle_radius - 0.005) * np.cos(theta)
-			danger_y = obstacle[1] + (obstacle_radius - 0.005) * np.sin(theta)
+			danger_x = obstacle[0] + (obstacle_radius - 0.005) * np.cos(theta_list)
+			danger_y = obstacle[1] + (obstacle_radius - 0.005) * np.sin(theta_list)
 			if first_obstacle:
 				ax.plot(danger_x, danger_y, 'r-', label='obstacle')
 				first_obstacle = False
@@ -315,8 +338,8 @@ class MPC:
 		# Plot the circle in the middle of the graph with radius 1/6
 		radius = 1 / 6
 		center_x, center_y = 0.5, 0.5
-		circle_x = center_x + radius * np.cos(theta)
-		circle_y = center_y + radius * np.sin(theta)
+		circle_x = center_x + radius * np.cos(theta_list)
+		circle_y = center_y + radius * np.sin(theta_list)
 		ax.plot(circle_x, circle_y, 'b-')
 
 		# Add the legend outside the square graph
