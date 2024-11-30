@@ -17,24 +17,23 @@ time_step_min = 0.05  # Minimum time step
 time_step_max = 0.5   # Maximum time step
 
 # start point and end point
-start_point = [0.1, 0.1]
-end_point = [.6, .8]
+start_point = [.5, 0.8]
+end_point = [0.1, 0.1]
 
 robot_length = 16/144
 robot_width = 15/144
+buffer_radius = 2/144
 
-robot_radius = max(robot_length, robot_width)/sqrt(2)
+robot_radius = sqrt(robot_length**2 + robot_width**2) / 2 + buffer_radius
 
 # Define maximum allowable velocity and acceleration
 max_velocity = 70/144
-max_accel = 50/144  # Example value, adjust as needed
+max_accel = 20/144  # Example value, adjust as needed
 
 # List of obstacle coordinates
 obstacles = [[3/6, 2/6], [3/6, 4/6], [2/6, 3/6], [4/6, 3/6]]
 
-# threshold of safety
 obstacle_radius = 3.5/144
-#obstacle_radius = 0.1
 
 class FirstStateIndex:
 	def __init__(self, n):
@@ -57,9 +56,8 @@ class MPC:
 		self.indexes.dt = self.num_of_x_-1
 
 		# Define cost functions
-		w_cte = 10.0 # Bigger value means last point has to be closer to designated end point
-		w_dv = 10 # Bigger value means smoother path
-		w_time_step = 10.0  # Weight for penalizing the time step
+		w_time_step = 100.0  # Weight for penalizing the time step
+		w_mid = 100.0 # penalized going towards the middle of the field
 		cost = 0.0
 
 		# Initial variables
@@ -73,22 +71,24 @@ class MPC:
 		init_v = [0] * ((lookahead_step_num-1) * NUM_OF_ACTS)
 		init_time_step = lookahead_step_timeinterval  # Initial guess for the time step
 		x_ = np.concatenate((init_x, init_y, init_v, [init_time_step]))
-
-		# Penalty on inputs, smoothing path, penalizes change in velocity
-		for i in range(lookahead_step_num - 2):
-			dvx = x[self.indexes.vx + i + 1] - x[self.indexes.vx + i]
-			dvy = x[self.indexes.vy + i + 1] - x[self.indexes.vy + i]
-			cost += w_dv * (dvx**2 + dvy**2)
+		# x_ = np.concatenate((
+		# 	[state[0]] * int(ceil(lookahead_step_num/2)), 
+		# 	[state[1]] * int(ceil(lookahead_step_num/2)),
+		# 	[end_point[0]] * int(floor(lookahead_step_num/2)),
+		# 	[end_point[1]] * int(floor(lookahead_step_num/2)),
+		# 	init_v, 
+		# 	[init_time_step]
+		# ))
 		
 		time_step = x[self.indexes.dt]
 		cost += w_time_step * time_step * lookahead_step_num
 		
-		# # Penalty on states, avoid going towards the middle of the field
-		# for i in range(lookahead_step_num - 1):
-		# 	px = x[self.indexes.px+i]
-		# 	py = x[self.indexes.py+i]
+		# Penalty on states, avoid going towards the middle of the field
+		for i in range(lookahead_step_num - 1):
+			px = x[self.indexes.px+i]
+			py = x[self.indexes.py+i]
 
-		# 	cost += if_else((px-0.5)**2 + (py-0.5)**2 < (1/6)**2, 1e10, 0)
+			cost += if_else((px-0.5)**2 + (py-0.5)**2 < (1/6)**2, w_mid, 0)
 
 		# Define lowerbound and upperbound for position and velocity
 		x_lowerbound_ = [-exp(10)] * self.num_of_x_
@@ -96,8 +96,8 @@ class MPC:
 
 		# Ensure path does not go outside the field
 		for i in range(self.indexes.px, self.indexes.py+lookahead_step_num):
-			x_lowerbound_[i] = 0
-			x_upperbound_[i] = 1
+			x_lowerbound_[i] = 0+robot_radius
+			x_upperbound_[i] = 1-robot_radius
 		# Ensure velocity does not exceed the max speed
 		for i in range(self.indexes.vx, self.indexes.vy+lookahead_step_num-1):
 			x_lowerbound_[i] = -max_velocity
@@ -215,6 +215,8 @@ class MPC:
 		opts = {}
 		opts["ipopt.print_level"] = 3
 		opts["print_time"] = 0
+		opts['ipopt.tol'] = 1e-6
+
 
 		solver = nlpsol('solver', 'ipopt', nlp, opts)
 
@@ -231,6 +233,7 @@ class MPC:
 		"""
 		# Extract the optimized trajectory from the result
 		x_opt = sol['x'].full().flatten()
+		final_cost = res['f'].full().item()  # Convert to scalar if it's in array form
 		
 		# Print header
 		print(f"{'Step':<5} {'Position (x, y)':<20}\t{'Velocity (vx, vy)':<20}\t{'Acceleration (ax, ay)':<25}")
@@ -262,14 +265,14 @@ class MPC:
 				ax = ay = 0  # No acceleration at the last step
 
 			# Print the details for this step
-			print(f"{i:<5} ({px:.2f}, {py:.2f})\t\t({vx:.2f}, {vy:.2f})\t\t({ax:.2f}, {ay:.2f})")
+			print(f"{i:<5} ({px*144:.2f}, {py*144:.2f})\t\t({vx*144:.2f}, {vy*144:.2f})\t\t({ax*144:.2f}, {ay*144:.2f})")
 
 			speed = sqrt(vx*vx+vy*vy)
 
 			lemlib_output_string += f"{px*144:.3f}, {py*144:.3f}, {speed*144:.3f}\n"
 		
-		print("")
-		print(f"Time step: {optimized_time_step:.2f}")
+		print(f"\nFinal cost: {final_cost:.2f}")
+		print(f"\nTime step: {optimized_time_step:.2f}")
 		print(f"Path time: {optimized_time_step * lookahead_step_num:.2f}")
 		lemlib_output_string += "endData"
 
@@ -291,8 +294,17 @@ class MPC:
 		# Makes sure the heading for the start and end point matches that of the second and second-to-last point
 		planned_theta = np.concatenate(([planned_theta[1]],planned_theta[1:-1],[planned_theta[-2],planned_theta[-2]]))
 
+		ax.plot(
+			[start_point[0], end_point[0]],  # x-coordinates of the line
+			[start_point[1], end_point[1]],  # y-coordinates of the line
+			linestyle=':',  # Dotted line style
+			color='gray',   # Line color
+			alpha=0.7,      # Transparency
+			label='direct path'  # Legend label
+		)
+
 		# Plot the planned path
-		ax.plot(planned_px, planned_py, 'o-', label='path')
+		ax.plot(planned_px, planned_py, '-o', label='path', color="blue", alpha=0.5)
 
 		# Define theta for circles
 		theta_list = np.linspace(0, 2 * np.pi, 100)
@@ -307,22 +319,22 @@ class MPC:
 				(px - robot_length / 2, py - robot_width / 2),  # Bottom-left corner
 				robot_length,  # Width of the rectangle
 				robot_width,   # Height of the rectangle
-				edgecolor='g',
+				edgecolor='blue',
 				facecolor='none',
-				alpha=0.5
+				alpha=1
 			)
 			rectangle.set_transform(rotation + ax.transData)
 
 			if(index % mod == 0 or index == lookahead_step_num - 1):
 				robot_circle_x = px + robot_radius * np.cos(theta_list)
 				robot_circle_y = py + robot_radius * np.sin(theta_list)
-				ax.plot(robot_circle_x, robot_circle_y, 'g--', alpha=0.5, label='robot radius' if index == 0 else None)
+				ax.plot(robot_circle_x, robot_circle_y, '--', color='blue', alpha=0.5, label='robot radius' if index == 0 else None)
 				ax.add_patch(rectangle)
 			index += 1
 		
 		# Plot start and end points
-		ax.plot(start_point[0], start_point[1], 'o', label='start')
-		ax.plot(end_point[0], end_point[1], 'o', label='target')
+		ax.plot(start_point[0], start_point[1], 'o', color='orange', label='start')
+		ax.plot(end_point[0], end_point[1], 'o', color='green', label='target')
 
 		# Plot obstacles
 		first_obstacle = True
@@ -340,7 +352,7 @@ class MPC:
 		center_x, center_y = 0.5, 0.5
 		circle_x = center_x + radius * np.cos(theta_list)
 		circle_y = center_y + radius * np.sin(theta_list)
-		ax.plot(circle_x, circle_y, 'b-')
+		ax.plot(circle_x, circle_y, 'r--', alpha=0.25)
 
 		# Add the legend outside the square graph
 		ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), borderaxespad=0., frameon=False)
