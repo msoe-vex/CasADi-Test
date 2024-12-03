@@ -2,6 +2,7 @@ from casadi import *
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.transforms import Affine2D
+import random
 
 # The num of MPC actions, here include vx and vy
 NUM_OF_ACTS = 2
@@ -10,15 +11,18 @@ NUM_OF_ACTS = 2
 NUM_OF_STATES = 2
 
 # MPC parameters
-lookahead_step_num = 50
+lookahead_step_num = 20
 lookahead_step_timeinterval = 0.1
 
 time_step_min = 0.05  # Minimum time step
 time_step_max = 0.5   # Maximum time step
 
 # start point and end point
-start_point = [.5, 0.8]
-end_point = [0.1, 0.1]
+start_point = [.1, 0.2]
+end_point = [0.9, 0.8]
+
+#start_point = [random.uniform(0.1, 0.9), random.uniform(0.9, 0.1)]
+#end_point = [random.uniform(0.1, 0.9), random.uniform(0.9, 0.1)]
 
 robot_length = 16/144
 robot_width = 15/144
@@ -28,12 +32,20 @@ robot_radius = sqrt(robot_length**2 + robot_width**2) / 2 + buffer_radius
 
 # Define maximum allowable velocity and acceleration
 max_velocity = 70/144
-max_accel = 20/144  # Example value, adjust as needed
+max_accel = 70/144  # Example value, adjust as needed
 
-# List of obstacle coordinates
-obstacles = [[3/6, 2/6], [3/6, 4/6], [2/6, 3/6], [4/6, 3/6]]
+center_circle_radius = 1/6+3.5/144
 
-obstacle_radius = 3.5/144
+class Obstacle:
+	def __init__(self, x, y, r):
+		self.x = x
+		self.y = y
+		self.radius = r
+
+obstacles = [Obstacle(3/6, 2/6, 3.5/144),
+			 Obstacle(3/6, 4/6, 3.5/144),
+			 Obstacle(2/6, 3/6, 3.5/144),
+			 Obstacle(4/6, 3/6, 3.5/144)]
 
 class FirstStateIndex:
 	def __init__(self, n):
@@ -50,6 +62,68 @@ class MPC:
 		#constraints for position at each obstacle, velocity, and acceleration
 		self.num_of_g_ = ((lookahead_step_num-1) * len(obstacles))  + (lookahead_step_num-1)*NUM_OF_ACTS + (lookahead_step_num-1) + (lookahead_step_num - 2) 
 
+	def intersects(self, x1, y1, x2, y2, r):
+		if(x1**2 + y1**2 < r**2 or x2**2 + y2**2 < r**2):
+			return False # prevent errors if start or end position is inside the circle
+		m = (y2 - y1) / (x2 - x1)
+		return 4*((m**2+1)*r**2-(y1-m*x1)**2) > 0
+
+	def get_initial_path(self, x1, y1, x2, y2, r):
+		x1 = x1 - 0.5
+		y1 = y1 - 0.5
+		x2 = x2 - 0.5
+		y2 = y2 - 0.5
+		if(self.intersects(x1, y1, x2, y2, r)):
+			start1 = 2*np.arctan((y1-sqrt(-r**2+x1**2+y1**2))/(x1+r))
+			start2 = 2*np.arctan((y1+sqrt(-r**2+x1**2+y1**2))/(x1+r))
+
+			end1 = 2*np.arctan((y2-sqrt(-r**2+x2**2+y2**2))/(x2+r))
+			end2 = 2*np.arctan((y2+sqrt(-r**2+x2**2+y2**2))/(x2+r))
+
+			x3 = r*np.cos(start1)
+			y3 = r*np.sin(start1)
+
+			x4 = r*np.cos(start2)
+			y4 = r*np.sin(start2)
+
+			x5 = r*np.cos(end1)
+			y5 = r*np.sin(end1)
+
+			x6 = r*np.cos(end2)
+			y6 = r*np.sin(end2)
+
+			m3 = (y3-y1)/(x3-x1)
+			m4 = (y4-y1)/(x4-x1)
+			m5 = (y5-y2)/(x5-x2)
+			m6 = (y6-y2)/(x6-x2)
+
+			x7 = (m3*x1 - m6*x2 - y1 + y2)/(m3-m6)
+			y7 = (m3*(m6*(x1-x2)+y2)-m6*y1)/(m3-m6)
+
+			x8 = (m4*x1 - m5*x2 - y1 + y2)/(m4-m5)
+			y8 = (m4*(m5*(x1-x2)+y2)-m5*y1)/(m4-m5)
+
+			d1 = sqrt((x7-x1)**2 + (y7-y1)**2) + sqrt((x7-x2)**2 + (y7-y2)**2)
+			d2 = sqrt((x8-x1)**2 + (y8-y1)**2) + sqrt((x8-x2)**2 + (y8-y2)**2)
+	
+			if(d1 < d2):
+				init_x = np.linspace(x1+0.5, x7+0.5, lookahead_step_num//2)
+				init_y = np.linspace(y1+0.5, y7+0.5, lookahead_step_num//2)
+				init_x2 = np.linspace(x7+0.5, x2+0.5, lookahead_step_num//2)
+				init_y2 = np.linspace(y7+0.5, y2+0.5, lookahead_step_num//2)
+			else:
+				init_x = np.linspace(x1+0.5, x8+0.5, lookahead_step_num//2)
+				init_y = np.linspace(y1+0.5, y8+0.5, lookahead_step_num//2)
+				init_x2 = np.linspace(x8+0.5, x2+0.5, lookahead_step_num//2)
+				init_y2 = np.linspace(y8+0.5, y2+0.5, lookahead_step_num//2)
+			init_x = np.concatenate((init_x, init_x2))
+			init_y = np.concatenate((init_y, init_y2))
+			
+		else:
+			init_x = np.linspace(x1+0.5, x2+0.5, lookahead_step_num)
+			init_y = np.linspace(y1+0.5, y2+0.5, lookahead_step_num)
+		return (init_x, init_y)
+
 	def Solve(self, state):
 		# Define optimization variables
 		x = SX.sym('x', self.num_of_x_)
@@ -64,8 +138,12 @@ class MPC:
 		x_ = [0] * self.num_of_x_
 
 		# Set initial values as a linear path
-		init_x = numpy.linspace(state[0], end_point[0], lookahead_step_num)
-		init_y = numpy.linspace(state[1], end_point[1], lookahead_step_num)
+
+		init_x, init_y = self.get_initial_path(state[0], state[1], end_point[0], end_point[1], center_circle_radius)
+
+		 # Store initial guess for plotting
+		self.init_x = init_x
+		self.init_y = init_y
 
 		#Set initial velocity to 0
 		init_v = [0] * ((lookahead_step_num-1) * NUM_OF_ACTS)
@@ -88,7 +166,7 @@ class MPC:
 			px = x[self.indexes.px+i]
 			py = x[self.indexes.py+i]
 
-			cost += if_else((px-0.5)**2 + (py-0.5)**2 < (1/6)**2, w_mid, 0)
+			cost += if_else((px-0.5)**2 + (py-0.5)**2 < (center_circle_radius)**2, w_mid, 0)
 
 		# Define lowerbound and upperbound for position and velocity
 		x_lowerbound_ = [-exp(10)] * self.num_of_x_
@@ -203,8 +281,8 @@ class MPC:
 
 			# Inequality constraints for each obstacle
 			for obstacle in obstacles:
-				g[g_index] = (curr_px - obstacle[0])**2 + (curr_py - obstacle[1])**2
-				g_lowerbound_[g_index] = (obstacle_radius+robot_radius)**2
+				g[g_index] = (curr_px - obstacle.x)**2 + (curr_py - obstacle.y)**2
+				g_lowerbound_[g_index] = (obstacle.radius+robot_radius)**2
 				g_upperbound_[g_index] = exp(10)
 				g_index += 1
 
@@ -294,14 +372,8 @@ class MPC:
 		# Makes sure the heading for the start and end point matches that of the second and second-to-last point
 		planned_theta = np.concatenate(([planned_theta[1]],planned_theta[1:-1],[planned_theta[-2],planned_theta[-2]]))
 
-		ax.plot(
-			[start_point[0], end_point[0]],  # x-coordinates of the line
-			[start_point[1], end_point[1]],  # y-coordinates of the line
-			linestyle=':',  # Dotted line style
-			color='gray',   # Line color
-			alpha=0.7,      # Transparency
-			label='direct path'  # Legend label
-		)
+		# Plot the initial guess path
+		ax.plot(self.init_x, self.init_y, linestyle=':', color='gray', alpha=0.7, label='initial path')
 
 		# Plot the planned path
 		ax.plot(planned_px, planned_py, '-o', label='path', color="blue", alpha=0.5)
@@ -339,16 +411,16 @@ class MPC:
 		# Plot obstacles
 		first_obstacle = True
 		for obstacle in obstacles:
-			danger_x = obstacle[0] + (obstacle_radius - 0.005) * np.cos(theta_list)
-			danger_y = obstacle[1] + (obstacle_radius - 0.005) * np.sin(theta_list)
+			danger_x = obstacle.x + (obstacle.radius - 0.005) * np.cos(theta_list)
+			danger_y = obstacle.y + (obstacle.radius - 0.005) * np.sin(theta_list)
 			if first_obstacle:
 				ax.plot(danger_x, danger_y, 'r-', label='obstacle')
 				first_obstacle = False
 			else:
 				ax.plot(danger_x, danger_y, 'r-')
 
-		# Plot the circle in the middle of the graph with radius 1/6
-		radius = 1 / 6
+		# Plot the circle in the middle of the graph
+		radius = center_circle_radius
 		center_x, center_y = 0.5, 0.5
 		circle_x = center_x + radius * np.cos(theta_list)
 		circle_y = center_y + radius * np.sin(theta_list)
