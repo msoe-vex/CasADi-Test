@@ -40,18 +40,19 @@ max_accel = 70/144  # Example value, adjust as needed
 center_circle_radius = 1/6+3.5/144
 
 class Obstacle:
-	def __init__(self, x, y, r):
+	def __init__(self, x, y, r, i):
 		self.x = x
 		self.y = y
 		self.radius = r
+		self.ignore_collision = i
 
-obstacles = [Obstacle(3/6, 2/6, 3.5/144),
-			 Obstacle(3/6, 4/6, 3.5/144),
-			 Obstacle(2/6, 3/6, 3.5/144),
-			 Obstacle(4/6, 3/6, 3.5/144)]
+obstacles = [Obstacle(3/6, 2/6, 3.5/144, False),
+			 Obstacle(3/6, 4/6, 3.5/144, False),
+			 Obstacle(2/6, 3/6, 3.5/144, False),
+			 Obstacle(4/6, 3/6, 3.5/144, False)]
 
 for i in range(5):
-	obstacles.append(Obstacle(random.uniform(.2, .8), random.uniform(.2, .8), 2/144))
+	obstacles.append(Obstacle(random.uniform(.2, .8), random.uniform(.2, .8), 2/144, True))
 
 class FirstStateIndex:
 	def __init__(self, n):
@@ -291,10 +292,16 @@ class MPC:
 
 			# Inequality constraints for each obstacle
 			for obstacle in obstacles:
-				g[g_index] = (curr_px - obstacle.x)**2 + (curr_py - obstacle.y)**2
-				g_lowerbound_[g_index] = (obstacle.radius+robot_radius)**2
-				g_upperbound_[g_index] = exp(10)
-				g_index += 1
+				if(obstacle.ignore_collision):
+					g[g_index] = (curr_px - obstacle.x)**2 + (curr_py - obstacle.y)**2
+					g_lowerbound_[g_index] = exp(-10)
+					g_upperbound_[g_index] = exp(10)
+					g_index += 1
+				else:
+					g[g_index] = (curr_px - obstacle.x)**2 + (curr_py - obstacle.y)**2
+					g_lowerbound_[g_index] = (obstacle.radius+robot_radius)**2
+					g_upperbound_[g_index] = exp(10)
+					g_index += 1
 
 		# Create the NLP
 		nlp = {'x': x, 'f': cost, 'g': vertcat(*g)}
