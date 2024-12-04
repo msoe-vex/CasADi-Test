@@ -11,18 +11,21 @@ NUM_OF_ACTS = 2
 NUM_OF_STATES = 2
 
 # MPC parameters
-lookahead_step_num = 20
+lookahead_step_num = 30
 lookahead_step_timeinterval = 0.1
 
-time_step_min = 0.05  # Minimum time step
-time_step_max = 0.5   # Maximum time step
+max_time = 10 # Maximum time for the path
+min_time = 0 # Minimum time for the path
+time_step_min = min_time/lookahead_step_num  # Minimum time step
+time_step_max = max_time/lookahead_step_num   # Maximum time step
 
 # start point and end point
-start_point = [.1, 0.2]
-end_point = [0.9, 0.8]
+start_point = [.1, .1]
+end_point = [.9, .9]
 
-#start_point = [random.uniform(0.1, 0.9), random.uniform(0.9, 0.1)]
-#end_point = [random.uniform(0.1, 0.9), random.uniform(0.9, 0.1)]
+
+start_point = [random.uniform(0.1, 0.3), random.uniform(0.1, 0.3)]
+end_point = [random.uniform(0.7, 0.9), random.uniform(0.7, 0.9)]
 
 robot_length = 16/144
 robot_width = 15/144
@@ -47,6 +50,9 @@ obstacles = [Obstacle(3/6, 2/6, 3.5/144),
 			 Obstacle(2/6, 3/6, 3.5/144),
 			 Obstacle(4/6, 3/6, 3.5/144)]
 
+for i in range(5):
+	obstacles.append(Obstacle(random.uniform(.2, .8), random.uniform(.2, .8), 2/144))
+
 class FirstStateIndex:
 	def __init__(self, n):
 		self.px = 0
@@ -58,9 +64,9 @@ class FirstStateIndex:
 class MPC:
 	def __init__(self):
 		self.indexes = FirstStateIndex(lookahead_step_num)
-		self.num_of_x_ = NUM_OF_STATES * lookahead_step_num + NUM_OF_ACTS * (lookahead_step_num - 1) + 1 # plus one for time step variable
+		self.num_of_x_ = (lookahead_step_num)*NUM_OF_STATES + (lookahead_step_num - 1)*NUM_OF_ACTS + 1 # plus one for time step variable
 		#constraints for position at each obstacle, velocity, and acceleration
-		self.num_of_g_ = ((lookahead_step_num-1) * len(obstacles))  + (lookahead_step_num-1)*NUM_OF_ACTS + (lookahead_step_num-1) + (lookahead_step_num - 2) 
+		self.num_of_g_ = (lookahead_step_num)*len(obstacles)  + (lookahead_step_num-1)*(NUM_OF_ACTS+1) + (lookahead_step_num - 2) 
 
 	def intersects(self, x1, y1, x2, y2, r):
 		if(x1**2 + y1**2 < r**2 or x2**2 + y2**2 < r**2):
@@ -131,7 +137,6 @@ class MPC:
 
 		# Define cost functions
 		w_time_step = 100.0  # Weight for penalizing the time step
-		w_mid = 100.0 # penalized going towards the middle of the field
 		cost = 0.0
 
 		# Initial variables
@@ -139,6 +144,10 @@ class MPC:
 
 		# Set initial values as a linear path
 
+		# init_x = np.linspace(state[0], end_point[0], lookahead_step_num)
+		# init_y = np.linspace(state[1], end_point[1], lookahead_step_num)
+		# init_x = [0] * lookahead_step_num
+		# init_y = [0] * lookahead_step_num
 		init_x, init_y = self.get_initial_path(state[0], state[1], end_point[0], end_point[1], center_circle_radius)
 
 		 # Store initial guess for plotting
@@ -161,12 +170,13 @@ class MPC:
 		time_step = x[self.indexes.dt]
 		cost += w_time_step * time_step * lookahead_step_num
 		
-		# Penalty on states, avoid going towards the middle of the field
-		for i in range(lookahead_step_num - 1):
-			px = x[self.indexes.px+i]
-			py = x[self.indexes.py+i]
+		# w_mid = 100.0 # penalized going towards the middle of the field
+		# # Penalty on states, avoid going towards the middle of the field
+		# for i in range(lookahead_step_num):
+		# 	px = x[self.indexes.px+i]
+		# 	py = x[self.indexes.py+i]
 
-			cost += if_else((px-0.5)**2 + (py-0.5)**2 < (center_circle_radius)**2, w_mid, 0)
+		# 	cost += if_else((px-0.5)**2 + (py-0.5)**2 < (center_circle_radius)**2, w_mid, 0)
 
 		# Define lowerbound and upperbound for position and velocity
 		x_lowerbound_ = [-exp(10)] * self.num_of_x_
@@ -272,7 +282,7 @@ class MPC:
 			g_index += 1
 
 		# Obstacle constraints
-		for i in range(lookahead_step_num-1):
+		for i in range(lookahead_step_num):
 			curr_px_index = i + self.indexes.px
 			curr_py_index = i + self.indexes.py
 
@@ -300,17 +310,12 @@ class MPC:
 
 		# Solve the NLP
 		res = solver(x0=x_, lbx=x_lowerbound_, ubx=x_upperbound_, lbg=g_lowerbound_, ubg=g_upperbound_)
+		self.status = solver.stats()['return_status']
 		return res
 	
 	def print_trajectory_details(self, res):
-		"""
-		Print the position, velocity, and acceleration of each step in the trajectory.
-
-		Parameters:
-		- res: The result object from the solver containing optimized trajectory.
-		"""
 		# Extract the optimized trajectory from the result
-		x_opt = sol['x'].full().flatten()
+		x_opt = res['x'].full().flatten()
 		final_cost = res['f'].full().item()  # Convert to scalar if it's in array form
 		
 		# Print header
@@ -352,6 +357,7 @@ class MPC:
 		print(f"\nFinal cost: {final_cost:.2f}")
 		print(f"\nTime step: {optimized_time_step:.2f}")
 		print(f"Path time: {optimized_time_step * lookahead_step_num:.2f}")
+		print(f"\nStatus: {self.status}")
 		lemlib_output_string += "endData"
 
 		file = open('path_output.txt', 'w')
@@ -431,8 +437,8 @@ class MPC:
 
 		# Ensure the graph remains square
 		ax.set_aspect('equal', adjustable='box')  # Make sure the graph area is square
-		ax.set_xlim(-0.1, 1.1)
-		ax.set_ylim(-0.1, 1.1)
+		ax.set_xlim(0, 1)
+		ax.set_ylim(0, 1)
 		ax.grid()
 
 		# Display the plot

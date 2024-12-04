@@ -1,13 +1,20 @@
 {
     "cSpell.words": [
+        "borderaxespad",
         "casadi",
+        "edgecolor",
+        "facecolor",
         "figsize",
+        "frameon",
         "ipopt",
+        "linestyle",
         "lowerbound",
         "nlpsol",
         "Tianchen",
         "timeinterval",
         "upperbound",
-        "vertcat"
+        "vertcat",
+        "xlim",
+        "ylim"
     ]
 }
