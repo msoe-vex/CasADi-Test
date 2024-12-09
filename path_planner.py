@@ -20,22 +20,23 @@ time_step_min = min_time/lookahead_step_num  # Minimum time step
 time_step_max = max_time/lookahead_step_num   # Maximum time step
 
 # start point and end point
-start_point = [.1, .1]
-end_point = [.9, .9]
+start_point = [24/144, 24/144]
+end_point = [120/144, 120/144]
 
+#start_point = [random.uniform(0.1, 0.3), random.uniform(0.1, 0.3)]
+#end_point = [random.uniform(0.7, 0.9), random.uniform(0.7, 0.9)]
 
-start_point = [random.uniform(0.1, 0.3), random.uniform(0.1, 0.3)]
-end_point = [random.uniform(0.7, 0.9), random.uniform(0.7, 0.9)]
-
-robot_length = 16/144
+robot_length = 15/144
 robot_width = 15/144
-buffer_radius = 2/144
+buffer_radius = 0/144
 
 robot_radius = sqrt(robot_length**2 + robot_width**2) / 2 + buffer_radius
 
 # Define maximum allowable velocity and acceleration
 max_velocity = 70/144
 max_accel = 70/144  # Example value, adjust as needed
+
+max_power = 100 # number 0 to 127
 
 center_circle_radius = 1/6+3.5/144
 
@@ -203,12 +204,12 @@ class MPC:
 		x_upperbound_[self.indexes.py+lookahead_step_num-1] = end_point[1]
 
 		#Constrain initial and final velocity
-		x_lowerbound_[self.indexes.vx] = 0
-		x_lowerbound_[self.indexes.vy] = 0
+		# x_lowerbound_[self.indexes.vx] = 0
+		# x_lowerbound_[self.indexes.vy] = 0
 		x_lowerbound_[self.indexes.vx+lookahead_step_num-2] = 0
 		x_lowerbound_[self.indexes.vy+lookahead_step_num-2] = 0
-		x_upperbound_[self.indexes.vx] = 0
-		x_upperbound_[self.indexes.vy] = 0
+		# x_upperbound_[self.indexes.vx] = 0
+		# x_upperbound_[self.indexes.vy] = 0
 		x_upperbound_[self.indexes.vx+lookahead_step_num-2] = 0
 		x_upperbound_[self.indexes.vy+lookahead_step_num-2] = 0
 
@@ -355,11 +356,11 @@ class MPC:
 				ax = ay = 0  # No acceleration at the last step
 
 			# Print the details for this step
-			print(f"{i:<5} ({px*144:.2f}, {py*144:.2f})\t\t({vx*144:.2f}, {vy*144:.2f})\t\t({ax*144:.2f}, {ay*144:.2f})")
+			print(f"{i:<5} ({px*144-72:.2f}, {py*144-72:.2f})\t\t({vx*144:.2f}, {vy*144:.2f})\t\t({ax*144:.2f}, {ay*144:.2f})")
 
-			speed = sqrt(vx*vx+vy*vy)
+			speed = (sqrt(vx*vx+vy*vy)/max_velocity*max_power) # normalized to a range from 0-127 which is 0-100% power in PROS
 
-			lemlib_output_string += f"{px*144:.3f}, {py*144:.3f}, {speed*144:.3f}\n"
+			lemlib_output_string += f"{px*144-72:.3f}, {py*144-72:.3f}, {speed:.3f}\n"
 		
 		print(f"\nFinal cost: {final_cost:.2f}")
 		print(f"\nTime step: {optimized_time_step:.2f}")
